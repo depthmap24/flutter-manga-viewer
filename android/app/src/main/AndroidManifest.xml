@@ -85,6 +85,15 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Disable Impeller (Vulkan renderer): hangs Flutter Shell::Create() on
+             Galaxy S25+. Previously this flag caused a pre-provideFlutterEngine
+             crash because FlutterApplication's background thread was racing it.
+             Now that we use plain Application, the background thread is gone and
+             the manifest flag should take effect cleanly. -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
     </application>
 
     <queries>
