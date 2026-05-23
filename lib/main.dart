@@ -1,19 +1,167 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:app_links/app_links.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
+import 'core/crash_logger.dart';
 import 'core/theme.dart';
 import 'models/image_file.dart';
 import 'providers/providers.dart';
+import 'screens/error_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/viewer_screen.dart';
 
 void main() {
-  runApp(const ProviderScope(child: ImageViewerApp()));
+  // Capture any error that escapes the widget tree.
+  runZonedGuarded<void>(
+    () {
+      WidgetsFlutterBinding.ensureInitialized();
+
+      // Route Flutter framework errors to our crash logger AND keep the
+      // default presentation so they show up in logcat too.
+      final defaultOnError = FlutterError.onError;
+      FlutterError.onError = (FlutterErrorDetails details) {
+        CrashLogger.record(
+          details.exceptionAsString(),
+          details.stack,
+          phase: 'FlutterError.onError',
+        );
+        defaultOnError?.call(details);
+      };
+
+      // Catch async errors that don't reach a Dart catch.
+      PlatformDispatcher.instance.onError = (error, stack) {
+        CrashLogger.record(error, stack, phase: 'PlatformDispatcher');
+        return true; // mark as handled — don't crash the engine
+      };
+
+      runApp(const _Bootstrap());
+    },
+    (error, stack) {
+      CrashLogger.record(error, stack, phase: 'runZonedGuarded');
+      // As a last resort, swap the running app with the ErrorScreen.
+      runApp(_FatalErrorApp(error: error, stack: stack));
+    },
+  );
+}
+
+/// Picks between the real app and the fallback ErrorScreen depending on
+/// whether the initial Riverpod/widget-tree build succeeded.
+class _Bootstrap extends StatefulWidget {
+  const _Bootstrap();
+
+  @override
+  State<_Bootstrap> createState() => _BootstrapState();
+}
+
+class _BootstrapState extends State<_Bootstrap> {
+  Object? _bootError;
+  StackTrace? _bootStack;
+  int _bootGeneration = 0;
+
+  void _recordBootError(Object error, StackTrace stack) {
+    CrashLogger.record(error, stack, phase: 'boot');
+    setState(() {
+      _bootError = error;
+      _bootStack = stack;
+    });
+  }
+
+  void _retry() {
+    setState(() {
+      _bootError = null;
+      _bootStack = null;
+      _bootGeneration++;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_bootError != null) {
+      return ErrorScreen(
+        error: _bootError!,
+        stackTrace: _bootStack,
+        onRetry: _retry,
+      );
+    }
+    return _SafeAppHost(
+      key: ValueKey(_bootGeneration),
+      onError: _recordBootError,
+    );
+  }
+}
+
+class _SafeAppHost extends StatelessWidget {
+  const _SafeAppHost({super.key, required this.onError});
+
+  final void Function(Object error, StackTrace stack) onError;
+
+  @override
+  Widget build(BuildContext context) {
+    // Any widget build error inside the app will be caught and bubbled up.
+    ErrorWidget.builder = (FlutterErrorDetails details) {
+      // We can't easily switch root from inside ErrorWidget; record and
+      // render a minimal placeholder so the framework's red screen doesn't
+      // appear in release.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        onError(
+          details.exception,
+          details.stack ?? StackTrace.current,
+        );
+      });
+      return Material(
+        color: Colors.black,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              kDebugMode
+                  ? details.exceptionAsString()
+                  : 'A widget failed to render.',
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+        ),
+      );
+    };
+
+    try {
+      return const ProviderScope(child: ImageViewerApp());
+    } catch (e, st) {
+      // Synchronous build error — extremely unlikely but be safe.
+      WidgetsBinding.instance.addPostFrameCallback((_) => onError(e, st));
+      return Material(
+        color: Colors.black,
+        child: Center(
+          child: Text(
+            'Boot failed',
+            style: TextStyle(color: Colors.red[200]),
+          ),
+        ),
+      );
+    }
+  }
+}
+
+class _FatalErrorApp extends StatelessWidget {
+  const _FatalErrorApp({required this.error, required this.stack});
+  final Object error;
+  final StackTrace stack;
+
+  @override
+  Widget build(BuildContext context) {
+    return ErrorScreen(
+      error: error,
+      stackTrace: stack,
+      // Try a full restart by re-running main.
+      onRetry: () => runApp(const _Bootstrap()),
+    );
+  }
 }
 
 class ImageViewerApp extends ConsumerStatefulWidget {
@@ -25,24 +173,43 @@ class ImageViewerApp extends ConsumerStatefulWidget {
 
 class _ImageViewerAppState extends ConsumerState<ImageViewerApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
-  final _appLinks = AppLinks();
+  AppLinks? _appLinks;
   StreamSubscription<Uri>? _linkSub;
 
   @override
   void initState() {
     super.initState();
-    _setupDeepLinks();
+    // Defer plugin-channel touches until after the first frame so the engine
+    // is fully attached. This prevents races where getInitialLink is called
+    // before the Android plugin has registered itself.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _setupDeepLinks());
   }
 
   Future<void> _setupDeepLinks() async {
     try {
-      final initial = await _appLinks.getInitialLink();
+      _appLinks = AppLinks();
+    } catch (e, st) {
+      await CrashLogger.record(e, st, phase: 'AppLinks ctor');
+      return;
+    }
+
+    try {
+      final initial = await _appLinks!.getInitialLink();
       if (initial != null) _handleIncomingUri(initial);
-    } catch (_) {/* ignore */}
-    _linkSub = _appLinks.uriLinkStream.listen(
-      _handleIncomingUri,
-      onError: (_) {},
-    );
+    } catch (e, st) {
+      await CrashLogger.record(e, st, phase: 'getInitialLink');
+    }
+
+    try {
+      _linkSub = _appLinks!.uriLinkStream.listen(
+        _handleIncomingUri,
+        onError: (Object e, StackTrace st) =>
+            CrashLogger.record(e, st, phase: 'uriLinkStream onError'),
+        cancelOnError: false,
+      );
+    } catch (e, st) {
+      await CrashLogger.record(e, st, phase: 'uriLinkStream.listen');
+    }
   }
 
   void _handleIncomingUri(Uri uri) {
@@ -52,6 +219,7 @@ class _ImageViewerAppState extends ConsumerState<ImageViewerApp> {
     final file = File(path);
     final folder = file.parent;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       ref.read(selectedFolderProvider.notifier).state = folder;
       _navigatorKey.currentState?.push(
         MaterialPageRoute(
@@ -64,7 +232,6 @@ class _ImageViewerAppState extends ConsumerState<ImageViewerApp> {
   String? _resolveFilePath(Uri uri) {
     if (uri.scheme == 'file') return uri.toFilePath();
     if (uri.scheme == 'content') {
-      // content:// URIs require ContentResolver — out of scope for v1.
       final segs = uri.pathSegments;
       if (segs.isNotEmpty && ImageFile.isSupported(segs.last)) {
         return segs.last;
@@ -96,8 +263,6 @@ class _ImageViewerAppState extends ConsumerState<ImageViewerApp> {
   }
 }
 
-/// Bridges a deep-link target into the viewer at the correct PageView index
-/// once the folder scan finishes.
 class _DeepLinkBootstrap extends ConsumerWidget {
   const _DeepLinkBootstrap({required this.targetPath});
   final String targetPath;
