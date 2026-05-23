@@ -9,6 +9,7 @@ import android.os.Looper
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.FlutterInjector
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import java.io.File
 import java.io.PrintWriter
@@ -44,16 +45,35 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // Called by FlutterActivity to create (or reuse) the Flutter engine.
-    // Logs entry/exit so we know whether the crash is inside engine init.
+    // Create the FlutterEngine ourselves so we can place marks around each
+    // sub-step.  Returning non-null here prevents FlutterActivity from calling
+    // `new FlutterEngine()` internally (which is where the crash was happening).
     override fun provideFlutterEngine(context: Context): FlutterEngine? {
         appendBootMark("provideFlutterEngine start")
         return try {
-            val engine = super.provideFlutterEngine(context)
-            appendBootMark("provideFlutterEngine done engine=${if (engine != null) "ok" else "null"}")
+            val loader = FlutterInjector.instance().flutterLoader()
+
+            // startInitialization is idempotent; FlutterApplication may have
+            // already called it, but calling again is safe.
+            appendBootMark("FlutterLoader.startInit start")
+            loader.startInitialization(context.applicationContext)
+            appendBootMark("FlutterLoader.startInit done")
+
+            // ensureInitializationComplete blocks until native init finishes,
+            // including System.loadLibrary("flutter") → libflutter.so JNI_OnLoad.
+            // If a SIGSEGV fires here the last mark in the log will be "start".
+            appendBootMark("FlutterLoader.ensureComplete start")
+            loader.ensureInitializationComplete(context.applicationContext, null)
+            appendBootMark("FlutterLoader.ensureComplete done")
+
+            // FlutterEngine() wires up the Dart VM and FlutterJNI.
+            appendBootMark("FlutterEngine() start")
+            val engine = FlutterEngine(context)
+            appendBootMark("FlutterEngine() done")
             engine
         } catch (t: Throwable) {
             persistCrash("provideFlutterEngine", t)
+            appendBootMark("provideFlutterEngine FAILED: ${t.javaClass.simpleName}")
             throw t
         }
     }
