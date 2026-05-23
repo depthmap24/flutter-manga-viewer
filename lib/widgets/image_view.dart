@@ -1,15 +1,12 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 
-import '../models/image_file.dart';
-
-/// Renders an image with pinch-to-zoom and double-tap to reset.
+/// Renders a MediaStore asset with pinch-to-zoom and double-tap to reset.
 class ZoomableImageView extends StatefulWidget {
-  const ZoomableImageView({super.key, required this.image});
+  const ZoomableImageView({super.key, required this.asset});
 
-  final ImageFile image;
+  final AssetEntity asset;
 
   @override
   State<ZoomableImageView> createState() => _ZoomableImageViewState();
@@ -64,22 +61,6 @@ class _ZoomableImageViewState extends State<ZoomableImageView>
 
   @override
   Widget build(BuildContext context) {
-    final child = widget.image.isSvg
-        ? SvgPicture.file(
-            File(widget.image.path),
-            fit: BoxFit.contain,
-            placeholderBuilder: (_) =>
-                const Center(child: CircularProgressIndicator()),
-          )
-        : Image.file(
-            File(widget.image.path),
-            fit: BoxFit.contain,
-            gaplessPlayback: true,
-            errorBuilder: (_, __, ___) => const Center(
-              child: Icon(Icons.broken_image, size: 64),
-            ),
-          );
-
     return GestureDetector(
       onDoubleTapDown: _handleDoubleTapDown,
       onDoubleTap: _handleDoubleTap,
@@ -88,7 +69,23 @@ class _ZoomableImageViewState extends State<ZoomableImageView>
         minScale: 1.0,
         maxScale: 6.0,
         clipBehavior: Clip.none,
-        child: Center(child: child),
+        child: Center(
+          child: AssetEntityImage(
+            widget.asset,
+            isOriginal: true,
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => const Center(
+              child: Icon(Icons.broken_image, size: 64, color: Colors.white54),
+            ),
+            loadingBuilder: (context, child, loading) {
+              if (loading == null) return child;
+              return const Center(
+                child: CircularProgressIndicator(color: Colors.white70),
+              );
+            },
+          ),
+        ),
       ),
     );
   }

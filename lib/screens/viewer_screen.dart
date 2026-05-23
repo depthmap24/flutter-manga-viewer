@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:photo_manager/photo_manager.dart';
 
-import '../models/image_file.dart';
 import '../providers/providers.dart';
 import '../services/image_actions.dart';
 import '../services/share_service.dart';
@@ -27,6 +27,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       ref.read(currentIndexProvider.notifier).state = widget.initialIndex;
     });
   }
@@ -37,12 +38,12 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
     super.dispose();
   }
 
-  Future<void> _deleteCurrent(List<ImageFile> images, int index) async {
+  Future<void> _deleteCurrent(List<AssetEntity> assets, int index) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete image?'),
-        content: Text(images[index].name),
+        content: Text(assets[index].title ?? '<unnamed>'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -56,7 +57,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
       ),
     );
     if (confirm != true) return;
-    final ok = await ImageActions.delete(images[index].path);
+    final ok = await ImageActions.delete(assets[index]);
     if (!mounted) return;
     if (ok) {
       ref.read(imageListProvider.notifier).removeAt(index);
@@ -70,34 +71,45 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
       }
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Delete failed')),
+        const SnackBar(
+          content: Text(
+            'Delete failed. Android may need you to confirm the action.',
+          ),
+        ),
       );
     }
   }
 
-  Future<void> _editCurrent(ImageFile image) async {
+  Future<void> _editCurrent(AssetEntity asset) async {
     final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => EditScreen(image: image)),
+      MaterialPageRoute(builder: (_) => EditScreen(asset: asset)),
     );
-    if (changed == true) {
-      // refresh image cache by re-reading list
+    if (changed == true && mounted) {
       await ref.read(imageListProvider.notifier).refresh();
-      if (mounted) setState(() {});
     }
   }
 
-  void _showMetadata(ImageFile image) {
+  void _showMetadata(AssetEntity asset) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => MetadataSheet(image: image),
+      builder: (_) => MetadataSheet(asset: asset),
     );
+  }
+
+  Future<void> _share(AssetEntity asset) async {
+    final ok = await ShareService.shareAsset(asset);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not access file for sharing')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final asyncImages = ref.watch(imageListProvider);
+    final asyncAssets = ref.watch(imageListProvider);
     final currentIndex = ref.watch(currentIndexProvider);
 
     return Scaffold(
@@ -107,26 +119,29 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
           ? AppBar(
               backgroundColor: Colors.black.withValues(alpha: 0.4),
               foregroundColor: Colors.white,
-              title: asyncImages.value != null &&
-                      currentIndex < asyncImages.value!.length
-                  ? Text(asyncImages.value![currentIndex].name,
-                      overflow: TextOverflow.ellipsis)
+              title: asyncAssets.value != null &&
+                      currentIndex < asyncAssets.value!.length
+                  ? Text(
+                      asyncAssets.value![currentIndex].title ?? '',
+                      overflow: TextOverflow.ellipsis,
+                    )
                   : null,
             )
           : null,
-      body: asyncImages.when(
+      body: asyncAssets.when(
         loading: () => const Center(
           child: CircularProgressIndicator(color: Colors.white),
         ),
         error: (e, _) => Center(
-          child: Text('Error: $e',
-              style: const TextStyle(color: Colors.white)),
+          child: Text('Error: $e', style: const TextStyle(color: Colors.white)),
         ),
-        data: (images) {
-          if (images.isEmpty) {
+        data: (assets) {
+          if (assets.isEmpty) {
             return const Center(
-              child: Text('No images.',
-                  style: TextStyle(color: Colors.white)),
+              child: Text(
+                'No images.',
+                style: TextStyle(color: Colors.white),
+              ),
             );
           }
           return GestureDetector(
@@ -136,10 +151,10 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
               children: [
                 PageView.builder(
                   controller: _pageController,
-                  itemCount: images.length,
+                  itemCount: assets.length,
                   onPageChanged: (i) =>
                       ref.read(currentIndexProvider.notifier).state = i,
-                  itemBuilder: (_, i) => ZoomableImageView(image: images[i]),
+                  itemBuilder: (_, i) => ZoomableImageView(asset: assets[i]),
                 ),
                 if (_chromeVisible)
                   Positioned(
@@ -147,7 +162,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
                     right: 0,
                     bottom: 0,
                     child: _BottomBar(
-                      images: images,
+                      assets: assets,
                       currentIndex: currentIndex,
                       onThumbnailTap: (i) {
                         _pageController.animateToPage(
@@ -156,11 +171,10 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
                           curve: Curves.easeOut,
                         );
                       },
-                      onEdit: () => _editCurrent(images[currentIndex]),
-                      onDelete: () => _deleteCurrent(images, currentIndex),
-                      onShare: () =>
-                          ShareService.shareImage(images[currentIndex].path),
-                      onInfo: () => _showMetadata(images[currentIndex]),
+                      onEdit: () => _editCurrent(assets[currentIndex]),
+                      onDelete: () => _deleteCurrent(assets, currentIndex),
+                      onShare: () => _share(assets[currentIndex]),
+                      onInfo: () => _showMetadata(assets[currentIndex]),
                     ),
                   ),
               ],
@@ -174,7 +188,7 @@ class _ViewerScreenState extends ConsumerState<ViewerScreen> {
 
 class _BottomBar extends StatelessWidget {
   const _BottomBar({
-    required this.images,
+    required this.assets,
     required this.currentIndex,
     required this.onThumbnailTap,
     required this.onEdit,
@@ -183,7 +197,7 @@ class _BottomBar extends StatelessWidget {
     required this.onInfo,
   });
 
-  final List<ImageFile> images;
+  final List<AssetEntity> assets;
   final int currentIndex;
   final ValueChanged<int> onThumbnailTap;
   final VoidCallback onEdit;
@@ -201,7 +215,7 @@ class _BottomBar extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             ThumbnailStrip(
-              images: images,
+              assets: assets,
               currentIndex: currentIndex,
               onTap: onThumbnailTap,
             ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/crash_logger.dart';
+import '../services/share_service.dart';
 
 /// Fallback UI shown when the app's normal startup path threw a fatal error.
 /// Lets the user see what happened, copy the trace, wipe caches, or try again.
@@ -46,6 +47,24 @@ class _ErrorScreenState extends State<ErrorScreen> {
     widget.onRetry();
   }
 
+  Future<void> _shareLog() async {
+    final buffer = StringBuffer()
+      ..writeln(widget.error.toString())
+      ..writeln(widget.stackTrace ?? '<no stack>');
+    if (_persistedLog != null) {
+      buffer
+        ..writeln()
+        ..writeln('--- previous persisted error ---')
+        ..writeln(_persistedLog);
+    }
+    try {
+      await ShareService.shareText(
+        buffer.toString(),
+        subject: 'Image Viewer crash log',
+      );
+    } catch (_) {/* swallow */}
+  }
+
   void _copyToClipboard() {
     final buffer = StringBuffer()
       ..writeln(widget.error.toString())
@@ -78,6 +97,11 @@ class _ErrorScreenState extends State<ErrorScreen> {
         appBar: AppBar(
           title: const Text('Something went wrong'),
           actions: [
+            IconButton(
+              tooltip: 'Share log',
+              icon: const Icon(Icons.share),
+              onPressed: _shareLog,
+            ),
             IconButton(
               tooltip: 'Copy details',
               icon: const Icon(Icons.copy),

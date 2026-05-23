@@ -1,28 +1,27 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path/path.dart' as p;
-import 'package:permission_handler/permission_handler.dart';
+import 'package:photo_manager/photo_manager.dart';
 
 import '../core/crash_logger.dart';
 import '../providers/providers.dart';
-import '../services/file_scanner.dart';
+import '../services/gallery_service.dart';
+import '../services/share_service.dart';
 import '../services/update_service.dart';
 import 'viewer_screen.dart';
+
+class _InitResult {
+  _InitResult({required this.albums, required this.needsPermission});
+  final List<AssetPathEntity> albums;
+  final bool needsPermission;
+}
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
-}
-
-class _InitResult {
-  _InitResult({required this.roots, required this.needsAllFiles});
-  final List<Directory> roots;
-  final bool needsAllFiles;
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
@@ -32,7 +31,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    // Read previous crash log (if any) so we can warn the user once.
     CrashLogger.readLast().then((log) {
       if (!mounted) return;
       setState(() => _lastCrash = log);
@@ -41,66 +39,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<_InitResult> _safeInit() async {
-    bool needsAllFiles = false;
+    bool granted = false;
     try {
-      needsAllFiles = !await _ensureFileSystemAccess();
+      granted = await GalleryService.requestPermission();
     } catch (e, st) {
-      await CrashLogger.record(e, st, phase: 'requestPermissions');
+      await CrashLogger.record(e, st, phase: 'requestPermission');
     }
-
-    List<Directory> roots = const [];
+    if (!granted) {
+      return _InitResult(albums: const [], needsPermission: true);
+    }
+    List<AssetPathEntity> albums = const [];
     try {
-      roots = await FileScanner.availableRoots();
+      albums = await GalleryService.listAlbums();
     } catch (e, st) {
-      await CrashLogger.record(e, st, phase: 'availableRoots');
+      await CrashLogger.record(e, st, phase: 'listAlbums');
     }
-
-    // On Android 11+, if we have zero readable roots we almost certainly
-    // need MANAGE_EXTERNAL_STORAGE — flag it so the UI offers the settings
-    // jump.
-    if (roots.isEmpty && Platform.isAndroid) {
-      needsAllFiles = true;
-    }
-
     unawaited(_maybeCheckUpdate());
-    return _InitResult(roots: roots, needsAllFiles: needsAllFiles);
-  }
-
-  /// Returns true when we have enough permission to do filesystem scanning.
-  /// On Android 11+ that means MANAGE_EXTERNAL_STORAGE granted. On older
-  /// versions Permission.storage / Permission.photos is sufficient.
-  Future<bool> _ensureFileSystemAccess() async {
-    if (!Platform.isAndroid) return true;
-
-    // Always ask for the photo permission so the picker keeps working even
-    // if the user declines all-files-access (we still surface MediaStore on
-    // the Pictures/DCIM roots once they exist).
-    try {
-      await Permission.photos.request();
-    } catch (_) {/* swallow */}
-
-    // Check whether we already have all-files-access. permission_handler
-    // maps this to MANAGE_EXTERNAL_STORAGE on API 30+ and to legacy
-    // READ/WRITE on older Android.
-    PermissionStatus status;
-    try {
-      status = await Permission.manageExternalStorage.status;
-      if (!status.isGranted) {
-        status = await Permission.manageExternalStorage.request();
-      }
-    } catch (e, st) {
-      await CrashLogger.record(e, st, phase: 'manageExternalStorage.request');
-      return false;
-    }
-    return status.isGranted;
-  }
-
-  Future<void> _openSystemSettings() async {
-    try {
-      await openAppSettings();
-    } catch (e, st) {
-      await CrashLogger.record(e, st, phase: 'openAppSettings');
-    }
+    return _InitResult(albums: albums, needsPermission: false);
   }
 
   Future<void> _maybeCheckUpdate() async {
@@ -108,9 +63,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       final info = await UpdateService.checkForUpdate();
       if (info == null || !info.isNewer || !mounted) return;
       _showUpdateBanner(info);
-    } catch (_) {
-      // Offline / GitHub down / API rate-limited: silently ignore.
-    }
+    } catch (_) {/* offline / rate-limited: ignore */}
   }
 
   void _showUpdateBanner(UpdateInfo info) {
@@ -125,7 +78,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => messenger.hideCurrentMaterialBanner(),
+            onPressed: messenger.hideCurrentMaterialBanner,
             child: const Text('Later'),
           ),
           FilledButton(
@@ -152,12 +105,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
-  void _openFolder(Directory dir) {
-    ref.read(selectedFolderProvider.notifier).state = dir;
+  void _openAlbum(AssetPathEntity album) {
+    ref.read(selectedAlbumProvider.notifier).state = album;
     ref.read(currentIndexProvider.notifier).state = 0;
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const ViewerScreen()),
     );
+  }
+
+  Future<void> _openSystemSettings() async {
+    await PhotoManager.openSetting();
   }
 
   void _showLastCrash() {
@@ -177,6 +134,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
         ),
         actions: [
+          TextButton(
+            onPressed: () async {
+              await ShareService.shareText(
+                log,
+                subject: 'Image Viewer crash log',
+              );
+            },
+            child: const Text('Share'),
+          ),
           TextButton(
             onPressed: () async {
               await CrashLogger.clear();
@@ -232,25 +198,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             );
           }
           final result = snap.data;
-          if (result == null || result.roots.isEmpty) {
-            return _NoFolderState(
-              needsAllFiles: result?.needsAllFiles ?? false,
+          if (result == null) return const SizedBox.shrink();
+          if (result.needsPermission) {
+            return _PermissionState(
               onGrant: _openSystemSettings,
               onRetry: () => setState(() => _init = _safeInit()),
             );
           }
+          if (result.albums.isEmpty) {
+            return const _EmptyState();
+          }
           return ListView.separated(
             padding: const EdgeInsets.symmetric(vertical: 8),
-            itemCount: result.roots.length,
+            itemCount: result.albums.length,
             separatorBuilder: (_, _) => const SizedBox(height: 4),
             itemBuilder: (_, i) {
-              final dir = result.roots[i];
-              return ListTile(
-                leading: const Icon(Icons.folder),
-                title: Text(p.basename(dir.path)),
-                subtitle: Text(dir.path),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => _openFolder(dir),
+              final album = result.albums[i];
+              return _AlbumTile(
+                album: album,
+                onTap: () => _openAlbum(album),
               );
             },
           );
@@ -260,13 +226,43 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-class _NoFolderState extends StatelessWidget {
-  const _NoFolderState({
-    required this.needsAllFiles,
-    required this.onGrant,
-    required this.onRetry,
-  });
-  final bool needsAllFiles;
+class _AlbumTile extends StatefulWidget {
+  const _AlbumTile({required this.album, required this.onTap});
+  final AssetPathEntity album;
+  final VoidCallback onTap;
+
+  @override
+  State<_AlbumTile> createState() => _AlbumTileState();
+}
+
+class _AlbumTileState extends State<_AlbumTile> {
+  int _count = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.album.assetCountAsync.then((c) {
+      if (!mounted) return;
+      setState(() => _count = c);
+    }).catchError((_) {/* leave as -1 */});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: const Icon(Icons.folder),
+      title: Text(widget.album.name),
+      subtitle: _count < 0
+          ? null
+          : Text('$_count ${_count == 1 ? 'image' : 'images'}'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: widget.onTap,
+    );
+  }
+}
+
+class _PermissionState extends StatelessWidget {
+  const _PermissionState({required this.onGrant, required this.onRetry});
   final VoidCallback onGrant;
   final VoidCallback onRetry;
 
@@ -278,40 +274,48 @@ class _NoFolderState extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              needsAllFiles ? Icons.folder_off : Icons.image_not_supported_outlined,
-              size: 64,
-            ),
+            const Icon(Icons.photo_library_outlined, size: 64),
             const SizedBox(height: 16),
-            Text(
-              needsAllFiles
-                  ? 'This app needs "All files access" to scan your image folders. '
-                      'On Android 11 and newer, regular photo permissions are not '
-                      'enough to read /storage/emulated/0/Pictures directly.'
-                  : 'No images found in the default folders '
-                      '(Pictures, DCIM, Download).',
+            const Text(
+              'Image Viewer needs access to your photos to browse and share '
+              'them. Tap below to grant the Photos permission.',
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 20),
-            if (needsAllFiles) ...[
-              FilledButton.icon(
-                onPressed: onGrant,
-                icon: const Icon(Icons.settings),
-                label: const Text('Grant file access'),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Toggle "Allow access to manage all files" on the page that '
-                'opens, then come back and tap Retry.',
-                style: TextStyle(fontSize: 12),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-            ],
+            FilledButton.icon(
+              onPressed: onGrant,
+              icon: const Icon(Icons.settings),
+              label: const Text('Grant photo access'),
+            ),
+            const SizedBox(height: 8),
             OutlinedButton.icon(
               onPressed: onRetry,
               icon: const Icon(Icons.refresh),
               label: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.image_not_supported_outlined, size: 64),
+            SizedBox(height: 16),
+            Text(
+              'No image albums found on this device.',
+              textAlign: TextAlign.center,
             ),
           ],
         ),
@@ -336,7 +340,7 @@ class _ErrorState extends StatelessWidget {
             const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
             const SizedBox(height: 12),
             const Text(
-              'Could not load image folders.',
+              'Could not load albums.',
               style: TextStyle(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 4),
@@ -353,4 +357,3 @@ class _ErrorState extends StatelessWidget {
     );
   }
 }
-

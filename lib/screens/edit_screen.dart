@@ -1,16 +1,19 @@
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crop_your_image/crop_your_image.dart';
 import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
 
-import '../models/image_file.dart';
+import '../services/asset_file.dart';
 import '../services/image_actions.dart';
 
+/// Edits a copy of the underlying file and saves the result back to
+/// MediaStore as a new asset. We never modify the source in place — that
+/// would require special MediaStore "edit pending" flows that don't work
+/// for assets owned by other apps.
 class EditScreen extends StatefulWidget {
-  const EditScreen({super.key, required this.image});
-
-  final ImageFile image;
+  const EditScreen({super.key, required this.asset});
+  final AssetEntity asset;
 
   @override
   State<EditScreen> createState() => _EditScreenState();
@@ -18,42 +21,52 @@ class EditScreen extends StatefulWidget {
 
 class _EditScreenState extends State<EditScreen> {
   final _cropController = CropController();
-  late Future<Uint8List> _bytes;
+  late Future<Uint8List?> _bytes;
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
-    _bytes = File(widget.image.path).readAsBytes();
+    _bytes = _loadBytes();
+  }
+
+  Future<Uint8List?> _loadBytes() async {
+    final file = await resolveAssetFile(widget.asset);
+    if (file == null) return null;
+    return file.readAsBytes();
   }
 
   Future<void> _rotateClockwise() async {
     setState(() => _saving = true);
-    final ok = await ImageActions.rotate(widget.image.path);
+    final newAsset = await ImageActions.rotate(widget.asset);
     if (!mounted) return;
-    if (ok) {
-      setState(() {
-        _bytes = File(widget.image.path).readAsBytes();
-        _saving = false;
-      });
+    setState(() => _saving = false);
+    if (newAsset != null) {
+      Navigator.of(context).pop(true);
     } else {
-      setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Rotate failed')),
       );
     }
   }
 
-  Future<void> _saveCrop() async {
+  void _saveCrop() {
     setState(() => _saving = true);
     _cropController.crop();
   }
 
   Future<void> _onCropped(Uint8List bytes) async {
-    await ImageActions.overwrite(widget.image.path, bytes);
+    final filename = widget.asset.title ?? 'image.jpg';
+    final newAsset = await ImageActions.saveCropped(filename, bytes);
     if (!mounted) return;
     setState(() => _saving = false);
-    Navigator.of(context).pop(true);
+    if (newAsset != null) {
+      Navigator.of(context).pop(true);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Crop save failed')),
+      );
+    }
   }
 
   @override
@@ -74,17 +87,29 @@ class _EditScreenState extends State<EditScreen> {
           ),
         ],
       ),
-      body: FutureBuilder<Uint8List>(
+      body: FutureBuilder<Uint8List?>(
         future: _bytes,
         builder: (context, snap) {
           if (!snap.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
+          final data = snap.data;
+          if (data == null) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  'Could not load image bytes from MediaStore.',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            );
+          }
           return Stack(
             children: [
               Crop(
                 controller: _cropController,
-                image: snap.data!,
+                image: data,
                 onCropped: (result) {
                   if (result is CropSuccess) {
                     _onCropped(result.croppedImage);

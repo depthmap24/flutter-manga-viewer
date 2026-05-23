@@ -2,16 +2,18 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
+import 'package:photo_manager/photo_manager.dart';
 
-import '../models/image_file.dart';
 import '../models/novelai_metadata.dart';
+import '../services/asset_file.dart';
 import '../services/exif_service.dart';
 import '../services/png_metadata.dart';
 
 class MetadataSheet extends StatefulWidget {
-  const MetadataSheet({super.key, required this.image});
+  const MetadataSheet({super.key, required this.asset});
 
-  final ImageFile image;
+  final AssetEntity asset;
 
   @override
   State<MetadataSheet> createState() => _MetadataSheetState();
@@ -21,13 +23,15 @@ class _MetadataSheetState extends State<MetadataSheet> {
   late final Future<_Bundle> _future = _load();
 
   Future<_Bundle> _load() async {
-    final exif = await ExifService.read(File(widget.image.path));
+    final file = await resolveAssetFile(widget.asset);
+    if (file == null) return _Bundle(const {}, null, '?');
+    final exif = await ExifService.read(file);
     NovelAIMetadata? ai;
-    if (widget.image.isPng) {
-      final chunks = await PngMetadata.readTextChunks(File(widget.image.path));
+    if (p.extension(file.path).toLowerCase() == '.png') {
+      final chunks = await PngMetadata.readTextChunks(file);
       ai = PngMetadata.parse(chunks);
     }
-    return _Bundle(exif, ai);
+    return _Bundle(exif, ai, widget.asset.title ?? p.basename(file.path));
   }
 
   @override
@@ -63,7 +67,7 @@ class _MetadataSheetState extends State<MetadataSheet> {
                     ),
                   ),
                 ),
-                Text(widget.image.name,
+                Text(bundle.name,
                     style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 16),
                 if (bundle.ai != null && bundle.ai!.hasContent) ...[
@@ -92,9 +96,13 @@ class _MetadataSheetState extends State<MetadataSheet> {
 }
 
 class _Bundle {
-  _Bundle(this.exif, this.ai);
+  _Bundle(this.exif, this.ai, this.name);
   final Map<String, String> exif;
   final NovelAIMetadata? ai;
+  final String name;
+
+  // ignore: unused_element
+  static Future<File?> _file(AssetEntity a) => resolveAssetFile(a);
 }
 
 class _AiSection extends StatelessWidget {

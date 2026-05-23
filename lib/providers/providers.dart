@@ -1,43 +1,43 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:photo_manager/photo_manager.dart';
 
-import '../models/image_file.dart';
-import '../services/file_scanner.dart';
+import '../services/gallery_service.dart';
 
-/// Currently selected folder. Null until the user picks one.
-final selectedFolderProvider = StateProvider<Directory?>((ref) => null);
+/// Currently selected album (Pictures, DCIM, ...). Null until the user picks.
+final selectedAlbumProvider = StateProvider<AssetPathEntity?>((ref) => null);
 
-/// Async list of images for the currently selected folder.
+/// Async list of images in the currently selected album.
 final imageListProvider =
-    AsyncNotifierProvider<ImageListNotifier, List<ImageFile>>(
+    AsyncNotifierProvider<ImageListNotifier, List<AssetEntity>>(
   ImageListNotifier.new,
 );
 
-class ImageListNotifier extends AsyncNotifier<List<ImageFile>> {
+class ImageListNotifier extends AsyncNotifier<List<AssetEntity>> {
   @override
-  Future<List<ImageFile>> build() async {
-    final folder = ref.watch(selectedFolderProvider);
-    if (folder == null) return const [];
-    return FileScanner.scanDirectory(folder);
+  Future<List<AssetEntity>> build() async {
+    final album = ref.watch(selectedAlbumProvider);
+    if (album == null) return const [];
+    return GalleryService.imagesInAlbum(album);
   }
 
   Future<void> refresh() async {
-    final folder = ref.read(selectedFolderProvider);
-    if (folder == null) {
+    final album = ref.read(selectedAlbumProvider);
+    if (album == null) {
       state = const AsyncData([]);
       return;
     }
     state = const AsyncLoading();
-    state = await AsyncValue.guard(() => FileScanner.scanDirectory(folder));
+    state = await AsyncValue.guard(() => GalleryService.imagesInAlbum(album));
   }
 
+  /// Removes an asset locally after a successful delete so the UI updates
+  /// before MediaStore notifications propagate.
   void removeAt(int index) {
     final current = state.value;
     if (current == null || index < 0 || index >= current.length) return;
-    final next = List<ImageFile>.from(current)..removeAt(index);
+    final next = List<AssetEntity>.from(current)..removeAt(index);
     state = AsyncData(next);
   }
 }

@@ -1,20 +1,17 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
-
-import '../models/image_file.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 
 /// Horizontally scrolling row of thumbnails synchronized with a PageView.
 class ThumbnailStrip extends StatefulWidget {
   const ThumbnailStrip({
     super.key,
-    required this.images,
+    required this.assets,
     required this.currentIndex,
     required this.onTap,
   });
 
-  final List<ImageFile> images;
+  final List<AssetEntity> assets;
   final int currentIndex;
   final ValueChanged<int> onTap;
 
@@ -31,7 +28,7 @@ class _ThumbnailStripState extends State<ThumbnailStrip> {
   void didUpdateWidget(covariant ThumbnailStrip old) {
     super.didUpdateWidget(old);
     if (old.currentIndex != widget.currentIndex) {
-      _scrollToCurrent();
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
     }
   }
 
@@ -60,11 +57,11 @@ class _ThumbnailStripState extends State<ThumbnailStrip> {
       child: ListView.builder(
         controller: _scroll,
         scrollDirection: Axis.horizontal,
-        itemCount: widget.images.length,
+        itemCount: widget.assets.length,
         padding: const EdgeInsets.symmetric(horizontal: 8),
         itemBuilder: (context, index) {
           final selected = index == widget.currentIndex;
-          final img = widget.images[index];
+          final asset = widget.assets[index];
           return GestureDetector(
             onTap: () => widget.onTap(index),
             child: Container(
@@ -80,16 +77,14 @@ class _ThumbnailStripState extends State<ThumbnailStrip> {
                 ),
               ),
               clipBehavior: Clip.hardEdge,
-              child: img.isSvg
-                  ? SvgPicture.file(File(img.path), fit: BoxFit.cover)
-                  : Image.file(
-                      File(img.path),
-                      fit: BoxFit.cover,
-                      cacheWidth: 128,
-                      gaplessPlayback: true,
-                      errorBuilder: (_, __, ___) =>
-                          const Icon(Icons.broken_image),
-                    ),
+              child: AssetEntityImage(
+                asset,
+                isOriginal: false,
+                thumbnailSize: const ThumbnailSize.square(128),
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                errorBuilder: (_, _, _) => const Icon(Icons.broken_image),
+              ),
             ),
           );
         },

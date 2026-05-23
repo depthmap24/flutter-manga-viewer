@@ -8,12 +8,6 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29"/>
 
-    <!-- All-files access for filesystem image scanning on Android 11+. Without
-         this, /storage/emulated/0/Pictures throws PathAccessException due to
-         scoped storage. The user must enable "All files access" for this app
-         in system settings; the app's permission flow opens that page. -->
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage"/>
 
     <!-- Network access for GitHub release check & APK download -->
     <uses-permission android:name="android.permission.INTERNET"/>
