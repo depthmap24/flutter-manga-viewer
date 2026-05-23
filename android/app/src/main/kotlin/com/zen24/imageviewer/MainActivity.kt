@@ -7,9 +7,9 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import io.flutter.FlutterInjector
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.FlutterInjector
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import java.io.File
 import java.io.PrintWriter
@@ -23,14 +23,9 @@ class MainActivity : FlutterActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Install the native uncaught-exception handler FIRST so anything that
-        // blows up in plugin registration, JNI, or the Flutter engine bring-up
-        // gets persisted before the process dies.
         installNativeCrashHandler()
         appendBootMark("MainActivity.onCreate enter")
 
-        // Watchdog: fires if we're still alive 20 s later (helps distinguish
-        // a hang from an instant native crash).
         mainHandler.postDelayed({
             appendBootMark("watchdog: still alive +20s after onCreate start")
         }, 20_000L)
@@ -45,31 +40,44 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // Create the FlutterEngine ourselves so we can place marks around each
-    // sub-step.  Returning non-null here prevents FlutterActivity from calling
-    // `new FlutterEngine()` internally (which is where the crash was happening).
+    // Create the engine with automaticallyRegisterPlugins=false so JniPlugin /
+    // libdartjni.so is NOT loaded inside the constructor.  We then register each
+    // plugin individually with before/after marks so a native-signal crash
+    // (SIGSEGV that bypasses Java handlers) leaves the log at exactly the step
+    // that killed the process.
+    @Suppress("UNCHECKED_CAST")
     override fun provideFlutterEngine(context: Context): FlutterEngine? {
         appendBootMark("provideFlutterEngine start")
         return try {
             val loader = FlutterInjector.instance().flutterLoader()
 
-            // startInitialization is idempotent; FlutterApplication may have
-            // already called it, but calling again is safe.
             appendBootMark("FlutterLoader.startInit start")
             loader.startInitialization(context.applicationContext)
             appendBootMark("FlutterLoader.startInit done")
 
-            // ensureInitializationComplete blocks until native init finishes,
-            // including System.loadLibrary("flutter") → libflutter.so JNI_OnLoad.
-            // If a SIGSEGV fires here the last mark in the log will be "start".
             appendBootMark("FlutterLoader.ensureComplete start")
             loader.ensureInitializationComplete(context.applicationContext, null)
             appendBootMark("FlutterLoader.ensureComplete done")
 
-            // FlutterEngine() wires up the Dart VM and FlutterJNI.
-            appendBootMark("FlutterEngine() start")
-            val engine = FlutterEngine(context)
-            appendBootMark("FlutterEngine() done")
+            // Pass automaticallyRegisterPlugins=false so plugin native libs are
+            // NOT loaded inside the constructor.
+            appendBootMark("FlutterEngine(no-auto-plugins) start")
+            val engine = FlutterEngine(context, null as Array<String>?, false)
+            appendBootMark("FlutterEngine(no-auto-plugins) done")
+
+            // Register each plugin with marks.  A SIGSEGV here leaves the log
+            // ending at "plugin X: registering" with no "ok" line.
+            registerPlugin(engine, "app_links")         { com.llfbandit.app_links.AppLinksPlugin() }
+            registerPlugin(engine, "jni")               { com.github.dart_lang.jni.JniPlugin() }
+            registerPlugin(engine, "jni_flutter")       { com.github.dart_lang.jni_flutter.JniFlutterPlugin() }
+            registerPlugin(engine, "open_filex")        { com.crazecoder.openfile.OpenFilePlugin() }
+            registerPlugin(engine, "package_info_plus") { dev.fluttercommunity.plus.packageinfo.PackageInfoPlugin() }
+            registerPlugin(engine, "permission_handler") { com.baseflow.permissionhandler.PermissionHandlerPlugin() }
+            registerPlugin(engine, "photo_manager")     { com.fluttercandies.photo_manager.PhotoManagerPlugin() }
+            registerPlugin(engine, "share_plus")        { dev.fluttercommunity.plus.share.SharePlusPlugin() }
+            registerPlugin(engine, "url_launcher")      { io.flutter.plugins.urllauncher.UrlLauncherPlugin() }
+
+            appendBootMark("all plugins registered, returning engine")
             engine
         } catch (t: Throwable) {
             persistCrash("provideFlutterEngine", t)
@@ -78,20 +86,9 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // Register each plugin individually so a crash in one pinpoints the culprit.
-    // (Replaces the default GeneratedPluginRegistrant.registerWith() batch call.)
+    // Plugins were registered in provideFlutterEngine; skip default batch call.
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-        appendBootMark("configureFlutterEngine start")
-        registerPlugin(flutterEngine, "app_links")       { com.llfbandit.app_links.AppLinksPlugin() }
-        registerPlugin(flutterEngine, "jni")             { com.github.dart_lang.jni.JniPlugin() }
-        registerPlugin(flutterEngine, "jni_flutter")     { com.github.dart_lang.jni_flutter.JniFlutterPlugin() }
-        registerPlugin(flutterEngine, "open_filex")      { com.crazecoder.openfile.OpenFilePlugin() }
-        registerPlugin(flutterEngine, "package_info_plus") { dev.fluttercommunity.plus.packageinfo.PackageInfoPlugin() }
-        registerPlugin(flutterEngine, "permission_handler") { com.baseflow.permissionhandler.PermissionHandlerPlugin() }
-        registerPlugin(flutterEngine, "photo_manager")   { com.fluttercandies.photo_manager.PhotoManagerPlugin() }
-        registerPlugin(flutterEngine, "share_plus")      { dev.fluttercommunity.plus.share.SharePlusPlugin() }
-        registerPlugin(flutterEngine, "url_launcher")    { io.flutter.plugins.urllauncher.UrlLauncherPlugin() }
-        appendBootMark("configureFlutterEngine done")
+        appendBootMark("configureFlutterEngine: plugins already registered, skipping")
     }
 
     private fun registerPlugin(
