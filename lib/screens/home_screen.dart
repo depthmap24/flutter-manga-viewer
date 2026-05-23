@@ -19,9 +19,14 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
+class _InitResult {
+  _InitResult({required this.roots, required this.needsAllFiles});
+  final List<Directory> roots;
+  final bool needsAllFiles;
+}
+
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  Future<List<Directory>>? _roots;
-  bool _permissionAsked = false;
+  Future<_InitResult>? _init;
   String? _lastCrash;
 
   @override
@@ -32,15 +37,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       if (!mounted) return;
       setState(() => _lastCrash = log);
     });
-    _roots = _safeInit();
+    _init = _safeInit();
   }
 
-  Future<List<Directory>> _safeInit() async {
+  Future<_InitResult> _safeInit() async {
+    bool needsAllFiles = false;
     try {
-      await _requestPermissions();
+      needsAllFiles = !await _ensureFileSystemAccess();
     } catch (e, st) {
       await CrashLogger.record(e, st, phase: 'requestPermissions');
-      // Continue — we'll just show what we can read.
     }
 
     List<Directory> roots = const [];
@@ -50,25 +55,51 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       await CrashLogger.record(e, st, phase: 'availableRoots');
     }
 
-    // Fire-and-forget update check; never blocks.
+    // On Android 11+, if we have zero readable roots we almost certainly
+    // need MANAGE_EXTERNAL_STORAGE — flag it so the UI offers the settings
+    // jump.
+    if (roots.isEmpty && Platform.isAndroid) {
+      needsAllFiles = true;
+    }
+
     unawaited(_maybeCheckUpdate());
-    return roots;
+    return _InitResult(roots: roots, needsAllFiles: needsAllFiles);
   }
 
-  Future<void> _requestPermissions() async {
-    if (_permissionAsked) return;
-    _permissionAsked = true;
-    if (!Platform.isAndroid) return;
+  /// Returns true when we have enough permission to do filesystem scanning.
+  /// On Android 11+ that means MANAGE_EXTERNAL_STORAGE granted. On older
+  /// versions Permission.storage / Permission.photos is sufficient.
+  Future<bool> _ensureFileSystemAccess() async {
+    if (!Platform.isAndroid) return true;
 
-    // Permission.photos maps to READ_MEDIA_IMAGES on API 33+ and to
-    // READ_EXTERNAL_STORAGE on older versions, so it covers both. We
-    // intentionally do NOT request Permission.storage because it is
-    // deprecated and noisy on Android 13+.
+    // Always ask for the photo permission so the picker keeps working even
+    // if the user declines all-files-access (we still surface MediaStore on
+    // the Pictures/DCIM roots once they exist).
     try {
       await Permission.photos.request();
+    } catch (_) {/* swallow */}
+
+    // Check whether we already have all-files-access. permission_handler
+    // maps this to MANAGE_EXTERNAL_STORAGE on API 30+ and to legacy
+    // READ/WRITE on older Android.
+    PermissionStatus status;
+    try {
+      status = await Permission.manageExternalStorage.status;
+      if (!status.isGranted) {
+        status = await Permission.manageExternalStorage.request();
+      }
     } catch (e, st) {
-      // Some custom ROMs throw if a permission isn't recognized.
-      await CrashLogger.record(e, st, phase: 'Permission.photos.request');
+      await CrashLogger.record(e, st, phase: 'manageExternalStorage.request');
+      return false;
+    }
+    return status.isGranted;
+  }
+
+  Future<void> _openSystemSettings() async {
+    try {
+      await openAppSettings();
+    } catch (e, st) {
+      await CrashLogger.record(e, st, phase: 'openAppSettings');
     }
   }
 
@@ -184,12 +215,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           IconButton(
             tooltip: 'Refresh',
             icon: const Icon(Icons.refresh),
-            onPressed: () => setState(() => _roots = _safeInit()),
+            onPressed: () => setState(() => _init = _safeInit()),
           ),
         ],
       ),
-      body: FutureBuilder<List<Directory>>(
-        future: _roots,
+      body: FutureBuilder<_InitResult>(
+        future: _init,
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -197,19 +228,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           if (snap.hasError) {
             return _ErrorState(
               message: snap.error.toString(),
-              onRetry: () => setState(() => _roots = _safeInit()),
+              onRetry: () => setState(() => _init = _safeInit()),
             );
           }
-          final roots = snap.data ?? const [];
-          if (roots.isEmpty) {
-            return const _EmptyState();
+          final result = snap.data;
+          if (result == null || result.roots.isEmpty) {
+            return _NoFolderState(
+              needsAllFiles: result?.needsAllFiles ?? false,
+              onGrant: _openSystemSettings,
+              onRetry: () => setState(() => _init = _safeInit()),
+            );
           }
           return ListView.separated(
             padding: const EdgeInsets.symmetric(vertical: 8),
-            itemCount: roots.length,
+            itemCount: result.roots.length,
             separatorBuilder: (_, _) => const SizedBox(height: 4),
             itemBuilder: (_, i) {
-              final dir = roots[i];
+              final dir = result.roots[i];
               return ListTile(
                 leading: const Icon(Icons.folder),
                 title: Text(p.basename(dir.path)),
@@ -225,23 +260,58 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+class _NoFolderState extends StatelessWidget {
+  const _NoFolderState({
+    required this.needsAllFiles,
+    required this.onGrant,
+    required this.onRetry,
+  });
+  final bool needsAllFiles;
+  final VoidCallback onGrant;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    return Center(
       child: Padding(
-        padding: EdgeInsets.all(24),
+        padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.image_not_supported_outlined, size: 64),
-            SizedBox(height: 16),
+            Icon(
+              needsAllFiles ? Icons.folder_off : Icons.image_not_supported_outlined,
+              size: 64,
+            ),
+            const SizedBox(height: 16),
             Text(
-              'No accessible image folders.\n'
-              'Grant storage permission in system settings and tap refresh.',
+              needsAllFiles
+                  ? 'This app needs "All files access" to scan your image folders. '
+                      'On Android 11 and newer, regular photo permissions are not '
+                      'enough to read /storage/emulated/0/Pictures directly.'
+                  : 'No images found in the default folders '
+                      '(Pictures, DCIM, Download).',
               textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            if (needsAllFiles) ...[
+              FilledButton.icon(
+                onPressed: onGrant,
+                icon: const Icon(Icons.settings),
+                label: const Text('Grant file access'),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Toggle "Allow access to manage all files" on the page that '
+                'opens, then come back and tap Retry.',
+                style: TextStyle(fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+            ],
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
             ),
           ],
         ),
