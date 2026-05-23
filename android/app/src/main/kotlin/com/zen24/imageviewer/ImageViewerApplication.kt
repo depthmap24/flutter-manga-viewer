@@ -4,7 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.os.Build
 import android.util.Log
-import io.flutter.app.FlutterApplication
+import io.flutter.embedding.engine.loader.FlutterLoader
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -26,7 +26,13 @@ import java.util.Locale
  * We extend FlutterApplication to keep multi-dex behavior the Flutter Gradle
  * plugin assumes via ${applicationName} in the manifest.
  */
-class ImageViewerApplication : FlutterApplication() {
+// Extend Application (not the deprecated FlutterApplication).
+// FlutterApplication.onCreate() calls FlutterLoader.startInitialization() which
+// spawns background threads for native init — if those threads crash they kill
+// the process before MainActivity.onCreate() even reaches the engine setup.
+// Extending plain Application avoids that async path; FlutterActivity calls
+// ensureInitializationComplete() synchronously on the main thread instead.
+class ImageViewerApplication : Application() {
 
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(base)

@@ -30,9 +30,10 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // Create the engine ourselves (no auto-plugins) so we can mark each step.
-    // Impeller is already disabled via manifest EnableImpeller=false; this lets
-    // us confirm whether the engine init succeeds with Impeller off.
+    // Create the engine with no auto-plugins so we can mark each sub-step.
+    // jni + jni_flutter are omitted: they load libdartjni.so (compiled on our
+    // ARM64 host via box64/NDK) which may have a native crash on device.
+    // photo_manager still works via its Java MethodChannel path without jni.
     @Suppress("UNCHECKED_CAST")
     override fun provideFlutterEngine(context: Context): FlutterEngine? {
         appendBootMark("provideFlutterEngine start")
@@ -46,15 +47,12 @@ class MainActivity : FlutterActivity() {
             loader.ensureInitializationComplete(context.applicationContext, null)
             appendBootMark("FlutterLoader.ensureComplete done")
 
-            // automaticallyRegisterPlugins=false so JniPlugin is NOT loaded here.
             appendBootMark("FlutterEngine(no-auto-plugins) start")
             val engine = FlutterEngine(context, null as Array<String>?, false)
             appendBootMark("FlutterEngine(no-auto-plugins) done")
 
-            // Register plugins one by one.
+            // jni + jni_flutter omitted — they load libdartjni.so which crashes.
             registerPlugin(engine, "app_links")         { com.llfbandit.app_links.AppLinksPlugin() }
-            registerPlugin(engine, "jni")               { com.github.dart_lang.jni.JniPlugin() }
-            registerPlugin(engine, "jni_flutter")       { com.github.dart_lang.jni_flutter.JniFlutterPlugin() }
             registerPlugin(engine, "open_filex")        { com.crazecoder.openfile.OpenFilePlugin() }
             registerPlugin(engine, "package_info_plus") { dev.fluttercommunity.plus.packageinfo.PackageInfoPlugin() }
             registerPlugin(engine, "permission_handler") { com.baseflow.permissionhandler.PermissionHandlerPlugin() }

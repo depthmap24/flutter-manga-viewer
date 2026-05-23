@@ -85,13 +85,6 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-
-        <!-- Disable Impeller (Vulkan renderer) — it hangs on Galaxy S25+ during
-             Shell::Create() / GPU-thread init, causing a 5-8 s hang then SIGKILL.
-             Fall back to Skia which is stable across all devices. -->
-        <meta-data
-            android:name="io.flutter.embedding.android.EnableImpeller"
-            android:value="false" />
     </application>
 
     <queries>
