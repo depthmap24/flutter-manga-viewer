@@ -1,10 +1,15 @@
 package com.zen24.imageviewer
 
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.plugins.FlutterPlugin
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -14,18 +19,73 @@ import java.util.Locale
 
 class MainActivity : FlutterActivity() {
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Install the native uncaught-exception handler FIRST so anything that
         // blows up in plugin registration, JNI, or the Flutter engine bring-up
         // gets persisted before the process dies.
         installNativeCrashHandler()
         appendBootMark("MainActivity.onCreate enter")
+
+        // Watchdog: fires if we're still alive 20 s later (helps distinguish
+        // a hang from an instant native crash).
+        mainHandler.postDelayed({
+            appendBootMark("watchdog: still alive +20s after onCreate start")
+        }, 20_000L)
+
         try {
             super.onCreate(savedInstanceState)
+            mainHandler.removeCallbacksAndMessages(null)
             appendBootMark("MainActivity.onCreate exit")
         } catch (t: Throwable) {
             persistCrash("MainActivity.onCreate", t)
             throw t
+        }
+    }
+
+    // Called by FlutterActivity to create (or reuse) the Flutter engine.
+    // Logs entry/exit so we know whether the crash is inside engine init.
+    override fun provideFlutterEngine(context: Context): FlutterEngine? {
+        appendBootMark("provideFlutterEngine start")
+        return try {
+            val engine = super.provideFlutterEngine(context)
+            appendBootMark("provideFlutterEngine done engine=${if (engine != null) "ok" else "null"}")
+            engine
+        } catch (t: Throwable) {
+            persistCrash("provideFlutterEngine", t)
+            throw t
+        }
+    }
+
+    // Register each plugin individually so a crash in one pinpoints the culprit.
+    // (Replaces the default GeneratedPluginRegistrant.registerWith() batch call.)
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        appendBootMark("configureFlutterEngine start")
+        registerPlugin(flutterEngine, "app_links")       { com.llfbandit.app_links.AppLinksPlugin() }
+        registerPlugin(flutterEngine, "jni")             { com.github.dart_lang.jni.JniPlugin() }
+        registerPlugin(flutterEngine, "jni_flutter")     { com.github.dart_lang.jni_flutter.JniFlutterPlugin() }
+        registerPlugin(flutterEngine, "open_filex")      { com.crazecoder.openfile.OpenFilePlugin() }
+        registerPlugin(flutterEngine, "package_info_plus") { dev.fluttercommunity.plus.packageinfo.PackageInfoPlugin() }
+        registerPlugin(flutterEngine, "permission_handler") { com.baseflow.permissionhandler.PermissionHandlerPlugin() }
+        registerPlugin(flutterEngine, "photo_manager")   { com.fluttercandies.photo_manager.PhotoManagerPlugin() }
+        registerPlugin(flutterEngine, "share_plus")      { dev.fluttercommunity.plus.share.SharePlusPlugin() }
+        registerPlugin(flutterEngine, "url_launcher")    { io.flutter.plugins.urllauncher.UrlLauncherPlugin() }
+        appendBootMark("configureFlutterEngine done")
+    }
+
+    private fun registerPlugin(
+        engine: FlutterEngine,
+        name: String,
+        factory: () -> FlutterPlugin
+    ) {
+        appendBootMark("plugin $name: registering")
+        try {
+            engine.plugins.add(factory())
+            appendBootMark("plugin $name: ok")
+        } catch (t: Throwable) {
+            persistCrash("plugin $name registration", t)
+            appendBootMark("plugin $name: FAILED ${t.javaClass.simpleName}")
         }
     }
 
