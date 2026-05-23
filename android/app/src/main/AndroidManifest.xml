@@ -16,7 +16,7 @@
 
     <application
         android:label="Image Viewer"
-        android:name="${applicationName}"
+        android:name=".ImageViewerApplication"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true">
 

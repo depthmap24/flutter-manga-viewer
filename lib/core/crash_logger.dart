@@ -57,15 +57,57 @@ ${stack ?? '<no stack>'}
     } catch (_) {/* swallow — never make logging itself crash */}
   }
 
-  /// Returns the last persisted error, or null if there isn't one.
+  /// Returns whatever crash evidence we have: Dart-side error log + native
+  /// (Kotlin) crash trace + boot phase markers. Returns null if nothing.
   static Future<String?> readLast() async {
+    final buffer = StringBuffer();
     try {
       final file = await _file();
-      if (file == null || !await file.exists()) return null;
-      return await file.readAsString();
-    } catch (_) {
-      return null;
-    }
+      if (file != null && await file.exists()) {
+        buffer
+          ..writeln('--- dart side ---')
+          ..writeln(await file.readAsString());
+      }
+    } catch (_) {/* ignore */}
+    final native = await readNativeLogs();
+    if (native != null) buffer.write(native);
+    if (buffer.isEmpty) return null;
+    return buffer.toString();
+  }
+
+  /// Reads native-side crash + boot trace logs written by the Kotlin
+  /// Application class. Returns a concatenated string (or null if neither
+  /// file exists). The native side writes to:
+  ///   - <internal>/files/native_crash.log
+  ///   - <internal>/files/boot_trace.log
+  /// and also to the external app-files dir (which is the user-accessible
+  /// /sdcard/Android/data/<package>/files/ path).
+  static Future<String?> readNativeLogs() async {
+    final buffer = StringBuffer();
+    try {
+      // The Kotlin side writes to ctx.filesDir which on Android is
+      // /data/data/<package>/files. The Dart path_provider's
+      // getApplicationSupportDirectory() returns a subdir of that, but the
+      // raw files are in the *parent* of the support dir.
+      final supportDir = await getApplicationSupportDirectory();
+      final filesDir = Directory(p.dirname(supportDir.path));
+      await _appendIfExists(filesDir, 'native_crash.log', buffer);
+      await _appendIfExists(filesDir, 'boot_trace.log', buffer);
+    } catch (_) {/* ignore */}
+    if (buffer.isEmpty) return null;
+    return buffer.toString();
+  }
+
+  static Future<void> _appendIfExists(
+    Directory dir,
+    String name,
+    StringBuffer out,
+  ) async {
+    final file = File(p.join(dir.path, name));
+    if (!await file.exists()) return;
+    out
+      ..writeln('--- $name ---')
+      ..writeln(await file.readAsString());
   }
 
   /// Deletes the persisted error file. Used by the "Clear & Restart" path.
