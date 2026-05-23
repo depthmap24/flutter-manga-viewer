@@ -5,9 +5,9 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import io.flutter.FlutterInjector
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import java.io.File
 import java.io.PrintWriter
@@ -30,46 +30,35 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // Create the engine with no auto-plugins so we can mark each sub-step.
-    // jni + jni_flutter are omitted: they load libdartjni.so (compiled on our
-    // ARM64 host via box64/NDK) which may have a native crash on device.
-    // photo_manager still works via its Java MethodChannel path without jni.
+    // Return the engine pre-warmed in Application.onCreate().
+    // All the slow GPU/JNI init happened there (before any Activity was visible),
+    // so this call should be near-instant and never ANR.
     @Suppress("UNCHECKED_CAST")
     override fun provideFlutterEngine(context: Context): FlutterEngine? {
-        appendBootMark("provideFlutterEngine start")
-        return try {
-            val loader = FlutterInjector.instance().flutterLoader()
-            appendBootMark("FlutterLoader.startInit start")
-            loader.startInitialization(context.applicationContext)
-            appendBootMark("FlutterLoader.startInit done")
-
-            appendBootMark("FlutterLoader.ensureComplete start")
-            loader.ensureInitializationComplete(context.applicationContext, null)
-            appendBootMark("FlutterLoader.ensureComplete done")
-
-            appendBootMark("FlutterEngine(no-auto-plugins) start")
-            val engine = FlutterEngine(context, null as Array<String>?, false)
-            appendBootMark("FlutterEngine(no-auto-plugins) done")
-
-            // jni + jni_flutter omitted — they load libdartjni.so which crashes.
-            registerPlugin(engine, "app_links")         { com.llfbandit.app_links.AppLinksPlugin() }
-            registerPlugin(engine, "open_filex")        { com.crazecoder.openfile.OpenFilePlugin() }
-            registerPlugin(engine, "package_info_plus") { dev.fluttercommunity.plus.packageinfo.PackageInfoPlugin() }
-            registerPlugin(engine, "permission_handler") { com.baseflow.permissionhandler.PermissionHandlerPlugin() }
-            registerPlugin(engine, "photo_manager")     { com.fluttercandies.photo_manager.PhotoManagerPlugin() }
-            registerPlugin(engine, "share_plus")        { dev.fluttercommunity.plus.share.SharePlusPlugin() }
-            registerPlugin(engine, "url_launcher")      { io.flutter.plugins.urllauncher.UrlLauncherPlugin() }
-            appendBootMark("all plugins registered")
-            engine
-        } catch (t: Throwable) {
-            persistCrash("provideFlutterEngine", t)
-            appendBootMark("provideFlutterEngine FAILED: ${t.javaClass.simpleName}")
-            throw t
+        appendBootMark("provideFlutterEngine: fetching pre-warmed engine")
+        val cached = FlutterEngineCache.getInstance().get(ImageViewerApplication.ENGINE_ID)
+        return if (cached != null) {
+            appendBootMark("provideFlutterEngine: cache hit — registering plugins")
+            registerPlugin(cached, "app_links")         { com.llfbandit.app_links.AppLinksPlugin() }
+            registerPlugin(cached, "open_filex")        { com.crazecoder.openfile.OpenFilePlugin() }
+            registerPlugin(cached, "package_info_plus") { dev.fluttercommunity.plus.packageinfo.PackageInfoPlugin() }
+            registerPlugin(cached, "permission_handler") { com.baseflow.permissionhandler.PermissionHandlerPlugin() }
+            registerPlugin(cached, "photo_manager")     { com.fluttercandies.photo_manager.PhotoManagerPlugin() }
+            registerPlugin(cached, "share_plus")        { dev.fluttercommunity.plus.share.SharePlusPlugin() }
+            registerPlugin(cached, "url_launcher")      { io.flutter.plugins.urllauncher.UrlLauncherPlugin() }
+            appendBootMark("provideFlutterEngine: plugins registered, returning engine")
+            cached
+        } else {
+            // Application.onCreate() failed to pre-warm — fall back to on-demand creation.
+            // This will likely ANR on S25+, but at least we'll know the cache missed.
+            appendBootMark("provideFlutterEngine: cache MISS — falling back to on-demand")
+            null  // Let FlutterActivity create one via the default path
         }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-        appendBootMark("configureFlutterEngine: plugins already registered, skipping")
+        // Plugins already registered in provideFlutterEngine; skip auto-registration.
+        appendBootMark("configureFlutterEngine: plugins already set, skipping super")
     }
 
     private fun registerPlugin(engine: FlutterEngine, name: String, factory: () -> FlutterPlugin) {

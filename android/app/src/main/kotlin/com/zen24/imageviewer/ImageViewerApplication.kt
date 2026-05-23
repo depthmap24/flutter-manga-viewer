@@ -6,6 +6,7 @@ import android.os.Build
 import android.util.Log
 import io.flutter.FlutterInjector
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterEngineCache
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -25,45 +26,26 @@ class ImageViewerApplication : Application() {
         super.onCreate()
         markBoot(this, "Application.onCreate")
 
-        // Probe whether FlutterEngine() can succeed on a background thread.
-        // The main-thread path blocks the UI thread; Android's ANR watchdog sends
-        // SIGKILL after ~5 s of blocking.  If we run the same constructor on a
-        // bg thread (no watchdog), we can distinguish:
-        //   "bg-probe: done" in log → engine CAN complete, just takes > 5 s on
-        //                             the main thread → ANR, not a crash
-        //   "bg-probe: start" with no "done" before process death → real crash
-        val appCtx = applicationContext
-        Thread {
-            try {
-                bgMark("bg-probe: FlutterLoader.startInit")
-                FlutterInjector.instance().flutterLoader().startInitialization(appCtx)
-                bgMark("bg-probe: FlutterLoader.ensureComplete")
-                FlutterInjector.instance().flutterLoader().ensureInitializationComplete(appCtx, null)
-                bgMark("bg-probe: FlutterEngine() start")
-                val engine = FlutterEngine(appCtx, null as Array<String>?, false)
-                bgMark("bg-probe: FlutterEngine() done — engine CAN be created on bg thread!")
-                engine.destroy()  // We don't need it, just testing
-                bgMark("bg-probe: engine destroyed")
-            } catch (t: Throwable) {
-                bgMark("bg-probe: FAILED ${t.javaClass.simpleName}: ${t.message}")
-            }
-        }.apply {
-            name = "flutter-engine-probe"
-            isDaemon = true  // Don't keep process alive just for this probe
-        }.start()
-    }
+        // Pre-warm the Flutter engine here, before any Activity starts.
+        // No Activity visible → no input-dispatching ANR watchdog (5 s limit).
+        // If FlutterEngine() hangs for 5-6 s it just delays startup; it does NOT
+        // cause the crash/SIGKILL that was happening inside provideFlutterEngine().
+        try {
+            val loader = FlutterInjector.instance().flutterLoader()
+            markBoot(this, "FlutterLoader.startInit")
+            loader.startInitialization(this)
+            markBoot(this, "FlutterLoader.ensureComplete")
+            loader.ensureInitializationComplete(this, null)
+            markBoot(this, "FlutterLoader.ensureComplete done")
 
-    private fun bgMark(msg: String) {
-        val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
-        val line = "[$ts] $msg\n"
-        Log.i(TAG, line.trim())
-        // Use applicationContext so filesDir is available
-        val dirs = listOfNotNull(filesDir, getExternalFilesDir(null))
-        for (d in dirs) {
-            try {
-                if (!d.exists()) d.mkdirs()
-                File(d, "boot_trace.log").appendText(line)
-            } catch (_: Throwable) {}
+            markBoot(this, "FlutterEngine() start — pre-warming before Activity")
+            val engine = FlutterEngine(this, null as Array<String>?, false)
+            markBoot(this, "FlutterEngine() done — caching")
+            FlutterEngineCache.getInstance().put(ENGINE_ID, engine)
+            markBoot(this, "engine cached OK")
+        } catch (t: Throwable) {
+            persistCrash(this, "Application.onCreate FlutterEngine", t)
+            markBoot(this, "FlutterEngine FAILED: ${t.javaClass.simpleName}: ${t.message}")
         }
     }
 
@@ -112,6 +94,7 @@ class ImageViewerApplication : Application() {
     }
 
     companion object {
+        const val ENGINE_ID = "main_engine"
         private const val TAG = "ImageViewerCrash"
     }
 }
