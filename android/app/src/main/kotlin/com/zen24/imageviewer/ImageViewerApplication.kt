@@ -4,7 +4,8 @@ import android.app.Application
 import android.content.Context
 import android.os.Build
 import android.util.Log
-import io.flutter.embedding.engine.loader.FlutterLoader
+import io.flutter.FlutterInjector
+import io.flutter.embedding.engine.FlutterEngine
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -12,26 +13,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * Custom Application that installs an uncaught-exception handler as early as
- * possible — even before MainActivity.onCreate — so we capture failures in:
- *   * Application init (ContentProviders, other Applications)
- *   * Plugin registration
- *   * Flutter engine native bring-up
- *
- * The handler writes to the app's external files dir, which is browsable by
- * any file manager at /sdcard/Android/data/com.zen24.imageviewer/files/
- * without any runtime permission.
- *
- * We extend FlutterApplication to keep multi-dex behavior the Flutter Gradle
- * plugin assumes via ${applicationName} in the manifest.
- */
-// Extend Application (not the deprecated FlutterApplication).
-// FlutterApplication.onCreate() calls FlutterLoader.startInitialization() which
-// spawns background threads for native init — if those threads crash they kill
-// the process before MainActivity.onCreate() even reaches the engine setup.
-// Extending plain Application avoids that async path; FlutterActivity calls
-// ensureInitializationComplete() synchronously on the main thread instead.
 class ImageViewerApplication : Application() {
 
     override fun attachBaseContext(base: Context) {
@@ -43,6 +24,47 @@ class ImageViewerApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         markBoot(this, "Application.onCreate")
+
+        // Probe whether FlutterEngine() can succeed on a background thread.
+        // The main-thread path blocks the UI thread; Android's ANR watchdog sends
+        // SIGKILL after ~5 s of blocking.  If we run the same constructor on a
+        // bg thread (no watchdog), we can distinguish:
+        //   "bg-probe: done" in log → engine CAN complete, just takes > 5 s on
+        //                             the main thread → ANR, not a crash
+        //   "bg-probe: start" with no "done" before process death → real crash
+        val appCtx = applicationContext
+        Thread {
+            try {
+                bgMark("bg-probe: FlutterLoader.startInit")
+                FlutterInjector.instance().flutterLoader().startInitialization(appCtx)
+                bgMark("bg-probe: FlutterLoader.ensureComplete")
+                FlutterInjector.instance().flutterLoader().ensureInitializationComplete(appCtx, null)
+                bgMark("bg-probe: FlutterEngine() start")
+                val engine = FlutterEngine(appCtx, null as Array<String>?, false)
+                bgMark("bg-probe: FlutterEngine() done — engine CAN be created on bg thread!")
+                engine.destroy()  // We don't need it, just testing
+                bgMark("bg-probe: engine destroyed")
+            } catch (t: Throwable) {
+                bgMark("bg-probe: FAILED ${t.javaClass.simpleName}: ${t.message}")
+            }
+        }.apply {
+            name = "flutter-engine-probe"
+            isDaemon = true  // Don't keep process alive just for this probe
+        }.start()
+    }
+
+    private fun bgMark(msg: String) {
+        val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+        val line = "[$ts] $msg\n"
+        Log.i(TAG, line.trim())
+        // Use applicationContext so filesDir is available
+        val dirs = listOfNotNull(filesDir, getExternalFilesDir(null))
+        for (d in dirs) {
+            try {
+                if (!d.exists()) d.mkdirs()
+                File(d, "boot_trace.log").appendText(line)
+            } catch (_: Throwable) {}
+        }
     }
 
     private fun installCrashHandler(ctx: Context) {
@@ -50,7 +72,7 @@ class ImageViewerApplication : Application() {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
                 persistCrash(ctx, "Uncaught thread=${thread.name}", throwable)
-            } catch (_: Throwable) {/* swallow */}
+            } catch (_: Throwable) {}
             previous?.uncaughtException(thread, throwable)
         }
     }
@@ -85,7 +107,7 @@ class ImageViewerApplication : Application() {
                 if (!d.exists()) d.mkdirs()
                 val f = File(d, name)
                 if (append) f.appendText(body) else f.writeText(body)
-            } catch (_: Throwable) {/* ignore */}
+            } catch (_: Throwable) {}
         }
     }
 
