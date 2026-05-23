@@ -1,10 +1,14 @@
 package com.zen24.imageviewer
 
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import io.flutter.FlutterInjector
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.plugins.FlutterPlugin
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -23,6 +27,61 @@ class MainActivity : FlutterActivity() {
         } catch (t: Throwable) {
             persistCrash("MainActivity.onCreate", t)
             throw t
+        }
+    }
+
+    // Create the engine ourselves (no auto-plugins) so we can mark each step.
+    // Impeller is already disabled via manifest EnableImpeller=false; this lets
+    // us confirm whether the engine init succeeds with Impeller off.
+    @Suppress("UNCHECKED_CAST")
+    override fun provideFlutterEngine(context: Context): FlutterEngine? {
+        appendBootMark("provideFlutterEngine start")
+        return try {
+            val loader = FlutterInjector.instance().flutterLoader()
+            appendBootMark("FlutterLoader.startInit start")
+            loader.startInitialization(context.applicationContext)
+            appendBootMark("FlutterLoader.startInit done")
+
+            appendBootMark("FlutterLoader.ensureComplete start")
+            loader.ensureInitializationComplete(context.applicationContext, null)
+            appendBootMark("FlutterLoader.ensureComplete done")
+
+            // automaticallyRegisterPlugins=false so JniPlugin is NOT loaded here.
+            appendBootMark("FlutterEngine(no-auto-plugins) start")
+            val engine = FlutterEngine(context, null as Array<String>?, false)
+            appendBootMark("FlutterEngine(no-auto-plugins) done")
+
+            // Register plugins one by one.
+            registerPlugin(engine, "app_links")         { com.llfbandit.app_links.AppLinksPlugin() }
+            registerPlugin(engine, "jni")               { com.github.dart_lang.jni.JniPlugin() }
+            registerPlugin(engine, "jni_flutter")       { com.github.dart_lang.jni_flutter.JniFlutterPlugin() }
+            registerPlugin(engine, "open_filex")        { com.crazecoder.openfile.OpenFilePlugin() }
+            registerPlugin(engine, "package_info_plus") { dev.fluttercommunity.plus.packageinfo.PackageInfoPlugin() }
+            registerPlugin(engine, "permission_handler") { com.baseflow.permissionhandler.PermissionHandlerPlugin() }
+            registerPlugin(engine, "photo_manager")     { com.fluttercandies.photo_manager.PhotoManagerPlugin() }
+            registerPlugin(engine, "share_plus")        { dev.fluttercommunity.plus.share.SharePlusPlugin() }
+            registerPlugin(engine, "url_launcher")      { io.flutter.plugins.urllauncher.UrlLauncherPlugin() }
+            appendBootMark("all plugins registered")
+            engine
+        } catch (t: Throwable) {
+            persistCrash("provideFlutterEngine", t)
+            appendBootMark("provideFlutterEngine FAILED: ${t.javaClass.simpleName}")
+            throw t
+        }
+    }
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        appendBootMark("configureFlutterEngine: plugins already registered, skipping")
+    }
+
+    private fun registerPlugin(engine: FlutterEngine, name: String, factory: () -> FlutterPlugin) {
+        appendBootMark("plugin $name: registering")
+        try {
+            engine.plugins.add(factory())
+            appendBootMark("plugin $name: ok")
+        } catch (t: Throwable) {
+            persistCrash("plugin $name", t)
+            appendBootMark("plugin $name: FAILED ${t.javaClass.simpleName}")
         }
     }
 
