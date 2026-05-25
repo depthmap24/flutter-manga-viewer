@@ -16,6 +16,9 @@ void main() {
     () async {
       WidgetsFlutterBinding.ensureInitialized();
 
+      // Prevent OOM crashes from full-resolution images filling the cache.
+      PaintingBinding.instance.imageCache.maximumSizeBytes = 50 * 1024 * 1024;
+
       FlutterError.onError = (details) {
         LogService.instance.error(
             details.exceptionAsString(), details.stack);

@@ -104,7 +104,12 @@ class _ViewerScreenState extends State<ViewerScreen> {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => EditScreen(
         imageFile: widget.images[_currentIndex],
-        onSaved: () => setState(() {}),
+        onSaved: () {
+          // Evict the stale decoded bitmap so Image.file re-reads the new file.
+          PaintingBinding.instance.imageCache
+              .evict(FileImage(widget.images[_currentIndex].file));
+          setState(() {});
+        },
       ),
     ));
   }

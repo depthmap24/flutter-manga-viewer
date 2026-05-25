@@ -36,6 +36,7 @@ class ImagePage extends StatelessWidget {
     return Image.file(
       imageFile.file,
       fit: BoxFit.contain,
+      gaplessPlayback: true,
       errorBuilder: (context, error, stackTrace) => Column(
         mainAxisSize: MainAxisSize.min,
         children: [
