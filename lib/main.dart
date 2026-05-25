@@ -6,6 +6,7 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'core/log_service.dart';
 import 'core/theme.dart';
@@ -30,21 +31,18 @@ void main() {
         return true;
       };
 
+      // Request MANAGE_EXTERNAL_STORAGE so the crash/log files land in Downloads
+      // (the fallback is the app's external-files dir, reachable via USB).
+      try {
+        await Permission.manageExternalStorage.request();
+      } catch (_) {}
+
       await LogService.instance.init();
-      LogService.instance.info('App starting');
+      LogService.instance.info('App starting — log: ${LogService.instance.logFilePath}');
 
       // Surface any crash report written by the Kotlin UncaughtExceptionHandler.
-      try {
-        final filesDir = await getApplicationDocumentsDirectory();
-        final crashFile = File('${filesDir.path}/crash.txt');
-        if (await crashFile.exists()) {
-          final report = await crashFile.readAsString();
-          LogService.instance.error('PREVIOUS CRASH REPORT:\n$report');
-          await crashFile.delete();
-        }
-      } catch (e) {
-        LogService.instance.warning('Could not read crash.txt: $e');
-      }
+      // Checks both the external (Downloads/imageviewer/) and the app external-files dir.
+      await _loadCrashReport();
 
       Uri? initialUri;
       try {
@@ -66,6 +64,36 @@ void main() {
       LogService.instance.error(error, stack);
     },
   );
+}
+
+/// Reads imageviewer_crash.txt from every location the Kotlin handler might
+/// have written to, logs the contents, then deletes the file.
+Future<void> _loadCrashReport() async {
+  final candidates = <File>[];
+  try {
+    final ext = await getExternalStorageDirectory();
+    if (ext != null) {
+      candidates.add(File('${ext.path}/imageviewer_crash.txt'));
+    }
+  } catch (_) {}
+  try {
+    // Downloads/imageviewer/ — written when MANAGE_EXTERNAL_STORAGE is granted.
+    candidates.add(File('/storage/emulated/0/Download/imageviewer/imageviewer_crash.txt'));
+  } catch (_) {}
+  try {
+    final internal = await getApplicationDocumentsDirectory();
+    candidates.add(File('${internal.path}/crash.txt'));
+  } catch (_) {}
+
+  for (final f in candidates) {
+    try {
+      if (await f.exists()) {
+        final report = await f.readAsString();
+        LogService.instance.error('PREVIOUS CRASH REPORT (${f.path}):\n$report');
+        await f.delete();
+      }
+    } catch (_) {}
+  }
 }
 
 class ImageViewerApp extends StatelessWidget {

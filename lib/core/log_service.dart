@@ -33,26 +33,45 @@ class LogService {
   static final instance = LogService._();
 
   final _entries = <LogEntry>[];
-  File? _logFile;
+  File? _logFile;         // internal storage — used by in-app LogScreen
+  File? _externalLogFile; // external storage — readable by file manager / USB
   bool _initialized = false;
 
   List<LogEntry> get entries => List.unmodifiable(_entries);
 
+  /// Path shown in LogScreen subtitle. Prefers the external path so the user
+  /// can find the file in a file manager.
+  String get logFilePath =>
+      _externalLogFile?.path ?? _logFile?.path ?? '(not initialized)';
+
   Future<void> init() async {
     if (_initialized) return;
     _initialized = true;
+
+    // Internal log (always available).
     try {
       final dir = await getApplicationDocumentsDirectory();
       final logsDir = Directory('${dir.path}/logs');
       await logsDir.create(recursive: true);
       _logFile = File('${logsDir.path}/app.log');
-      await _rotate();
-    } catch (_) {
-      // If log file setup fails, in-memory logging still works.
-    }
-  }
+      await _rotate(_logFile!);
+    } catch (_) {}
 
-  String get logFilePath => _logFile?.path ?? '(not initialized)';
+    // External log — visible in file manager and via USB/MTP.
+    try {
+      final ext = await getExternalStorageDirectory();
+      if (ext != null) {
+        final logsDir = Directory('${ext.path}/logs');
+        await logsDir.create(recursive: true);
+        _externalLogFile = File('${logsDir.path}/app.log');
+        await _rotate(_externalLogFile!);
+        // Replay whatever was already logged before init() finished.
+        for (final e in _entries) {
+          _appendToFile(_externalLogFile!, e);
+        }
+      }
+    } catch (_) {}
+  }
 
   void info(Object message, [StackTrace? st]) =>
       _record(LogLevel.info, message, st);
@@ -70,26 +89,22 @@ class LogService {
       message: message.toString(),
       stackTrace: st,
     );
-    if (_entries.length >= kLogMaxEntries) {
-      _entries.removeAt(0);
-    }
+    if (_entries.length >= kLogMaxEntries) _entries.removeAt(0);
     _entries.add(entry);
-    _writeToFile(entry);
+    _appendToFile(_logFile, entry);
+    _appendToFile(_externalLogFile, entry);
   }
 
-  void _writeToFile(LogEntry entry) {
-    final file = _logFile;
+  void _appendToFile(File? file, LogEntry entry) {
     if (file == null) return;
     try {
       file.writeAsStringSync('$entry\n', mode: FileMode.append);
     } catch (_) {}
   }
 
-  Future<void> _rotate() async {
-    final file = _logFile;
-    if (file == null || !await file.exists()) return;
-    final size = await file.length();
-    if (size > kLogMaxFileBytes) {
+  Future<void> _rotate(File file) async {
+    if (!await file.exists()) return;
+    if (await file.length() > kLogMaxFileBytes) {
       await file.writeAsString('');
     }
   }
@@ -97,6 +112,7 @@ class LogService {
   void clear() {
     _entries.clear();
     _logFile?.writeAsStringSync('');
+    _externalLogFile?.writeAsStringSync('');
   }
 
   // Only for tests — resets state without touching the filesystem.
