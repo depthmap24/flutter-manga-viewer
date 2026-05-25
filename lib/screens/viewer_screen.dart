@@ -23,7 +23,8 @@ class ViewerScreen extends StatefulWidget {
   State<ViewerScreen> createState() => _ViewerScreenState();
 }
 
-class _ViewerScreenState extends State<ViewerScreen> {
+class _ViewerScreenState extends State<ViewerScreen>
+    with WidgetsBindingObserver {
   late final PageController _page;
   late final List<TransformationController> _transforms;
   late int _currentIndex;
@@ -40,7 +41,24 @@ class _ViewerScreenState extends State<ViewerScreen> {
       (_) => TransformationController(),
     );
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    WidgetsBinding.instance.addObserver(this);
     _scheduleBarsHide();
+    LogService.instance.info(
+      'ViewerScreen open: ${widget.images.length} images, '
+      'start=${widget.initialIndex} (${widget.images[widget.initialIndex].name})',
+    );
+  }
+
+  @override
+  void didHaveMemoryPressure() {
+    final kb = PaintingBinding.instance.imageCache.currentSizeBytes ~/ 1024;
+    LogService.instance.warning(
+      'LOW MEMORY — imageCache=${kb}KB, '
+      'page=$_currentIndex/${widget.images.length - 1} '
+      '(${widget.images[_currentIndex].name})',
+    );
+    // Evict cached images to reduce pressure; visible page reloads automatically.
+    PaintingBinding.instance.imageCache.clear();
   }
 
   void _scheduleBarsHide() {
@@ -65,6 +83,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
   void _onPageChanged(int index) {
     _transforms[_currentIndex].value = Matrix4.identity();
     setState(() => _currentIndex = index);
+    LogService.instance.info(
+      'Page → $index/${widget.images.length - 1}: ${widget.images[index].name} '
+      '(cache ${PaintingBinding.instance.imageCache.currentSizeBytes ~/ 1024}KB)',
+    );
   }
 
   Future<void> _share() async {
@@ -120,6 +142,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _page.dispose();
     for (final t in _transforms) {
