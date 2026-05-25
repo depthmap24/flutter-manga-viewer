@@ -29,3 +29,12 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+# path_provider_android 2.3.x switched to a JNI-based implementation that
+# bundles libdartjni.so. On Android 16 (Galaxy S25+) the kernel uses 16KB
+# memory pages; libdartjni.so in jni 1.0.0 is only 4KB-aligned and the
+# dynamic linker refuses to load it, crashing the process before any Java
+# code runs. Force the pre-JNI 2.2.x series until the jni package ships
+# 16KB-aligned .so files.
+dependency_overrides:
+  path_provider_android: '>=2.2.5 <2.3.0'
