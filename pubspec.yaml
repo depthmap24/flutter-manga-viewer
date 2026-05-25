@@ -22,7 +22,6 @@ dependencies:
   crop_your_image: ^2.0.0
   app_links: ^7.0.0
   shared_preferences: ^2.5.4
-  file_picker: ^8.1.7
 
 dev_dependencies:
   flutter_test:
