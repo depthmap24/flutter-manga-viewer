@@ -49,6 +49,11 @@ class _AppInit extends StatefulWidget {
 
 class _AppInitState extends State<_AppInit> {
   Widget? _next;
+  String _step = 'Starting…';
+
+  void _setStep(String s) {
+    if (mounted) setState(() => _step = s);
+  }
 
   @override
   void initState() {
@@ -57,15 +62,18 @@ class _AppInitState extends State<_AppInit> {
   }
 
   Future<void> _init() async {
+    _setStep('Step 1/4: Initialising logs…');
     await LogService.instance.init()
         .timeout(const Duration(seconds: 5), onTimeout: () {});
     LogService.instance.info(
         'App started — log: ${LogService.instance.logFilePath}');
 
+    _setStep('Step 2/4: Checking crash reports…');
     await _loadCrashReport()
         .timeout(const Duration(seconds: 3), onTimeout: () {})
         .catchError((_) {});
 
+    _setStep('Step 3/4: Checking intent…');
     Uri? initialUri;
     try {
       initialUri = await AppLinks()
@@ -79,6 +87,7 @@ class _AppInitState extends State<_AppInit> {
     }
 
     if (!mounted) return;
+    _setStep('Step 4/4: Launching…');
     setState(() {
       _next = MaterialApp(
         title: 'Image Viewer',
@@ -96,11 +105,26 @@ class _AppInitState extends State<_AppInit> {
   @override
   Widget build(BuildContext context) {
     return _next ??
-        const MaterialApp(
+        MaterialApp(
           debugShowCheckedModeBanner: false,
           home: Scaffold(
             backgroundColor: Colors.black,
-            body: Center(child: CircularProgressIndicator(color: Colors.white)),
+            body: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(color: Colors.white),
+                  const SizedBox(height: 20),
+                  Text(
+                    _step,
+                    style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                        decoration: TextDecoration.none),
+                  ),
+                ],
+              ),
+            ),
           ),
         );
   }

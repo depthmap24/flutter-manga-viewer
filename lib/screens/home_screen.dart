@@ -27,16 +27,39 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _init() async {
-    await _requestPermission();
-    await initFolderPath(ref);
-    if (ref.read(folderPathProvider) == null) {
-      await _pickFolder();
+    try {
+      await _requestPermission();
+      await _loadPrefs();
+      if (ref.read(folderPathProvider) == null) {
+        await _pickFolder();
+      }
+    } catch (e, st) {
+      LogService.instance.error('HomeScreen._init() failed: $e', st);
     }
   }
 
   Future<void> _requestPermission() async {
-    final result = await PhotoManager.requestPermissionExtend();
-    LogService.instance.info('PhotoManager permission result: $result');
+    try {
+      final result = await PhotoManager.requestPermissionExtend()
+          .timeout(const Duration(seconds: 10), onTimeout: () {
+        LogService.instance.warning('PhotoManager permission request timed out');
+        return PermissionState.denied;
+      });
+      LogService.instance.info('PhotoManager permission result: $result');
+    } catch (e, st) {
+      LogService.instance.error('PhotoManager.requestPermissionExtend() failed: $e', st);
+    }
+  }
+
+  Future<void> _loadPrefs() async {
+    try {
+      await initFolderPath(ref)
+          .timeout(const Duration(seconds: 5), onTimeout: () {
+        LogService.instance.warning('SharedPreferences load timed out');
+      });
+    } catch (e, st) {
+      LogService.instance.error('initFolderPath failed: $e', st);
+    }
   }
 
   Future<void> _pickFolder() async {
