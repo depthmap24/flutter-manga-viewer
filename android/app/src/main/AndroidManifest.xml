@@ -2,8 +2,6 @@
 
     <!-- Permissions: Android 13+ (API 33+) uses READ_MEDIA_IMAGES instead of READ_EXTERNAL_STORAGE -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <!-- Allows writing the crash/log file to the Downloads folder on Android 11+. -->
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />

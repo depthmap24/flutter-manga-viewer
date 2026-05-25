@@ -1,7 +1,6 @@
 package com.depthmap24.imageviewer
 
 import android.app.Application
-import android.os.Environment
 import java.io.File
 
 class Application : Application() {
@@ -30,15 +29,12 @@ class Application : Application() {
 
     /** Candidate directories in preference order. The crash handler tries each in turn. */
     private fun crashDirs(): List<File> = buildList {
-        // 1. Downloads/imageviewer — visible in every file manager
-        val dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        if (dl != null) add(File(dl, "imageviewer"))
-
-        // 2. App external-files dir — no permission needed, reachable via USB/MTP
+        // App external-files dir — no permission needed on any Android version,
+        // reachable via USB/MTP at /sdcard/Android/data/<pkg>/files/
         val ext = getExternalFilesDir(null)
         if (ext != null) add(ext)
 
-        // 3. Internal files dir — always available, not visible to file managers
+        // Internal files dir — always available, not visible to file managers
         add(filesDir)
     }
 }

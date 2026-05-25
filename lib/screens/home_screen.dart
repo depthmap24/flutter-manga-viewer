@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../core/constants.dart';
@@ -36,12 +35,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _requestPermission() async {
-    // MANAGE_EXTERNAL_STORAGE — needed to write crash/log files to Downloads on Android 11+.
-    // Must be requested here (inside an Activity), never from main() before runApp().
-    try {
-      await Permission.manageExternalStorage.request();
-    } catch (_) {}
-
     final result = await PhotoManager.requestPermissionExtend();
     LogService.instance.info('PhotoManager permission result: $result');
   }
