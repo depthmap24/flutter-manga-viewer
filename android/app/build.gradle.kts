@@ -32,6 +32,19 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // Android 16 (Galaxy S25+) uses 16KB memory pages. By default AGP sets
+    // extractNativeLibs=false which requires .so files to be 16KB-aligned
+    // within the APK zip — Flutter's zipalign step uses 4KB alignment, so the
+    // dynamic linker crashes before any Java code runs.
+    // useLegacyPackaging=true tells Android to extract .so files to disk at
+    // install time instead. The ELF PT_LOAD segments are already ≥16KB aligned
+    // (0x4000–0x10000), so the extracted files load correctly on 16KB-page kernels.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 kotlin {
