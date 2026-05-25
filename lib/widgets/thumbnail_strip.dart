@@ -37,7 +37,7 @@ class _ThumbnailStripState extends State<ThumbnailStrip> {
   }
 
   void _scrollToIndex(int index) {
-    if (!_scroll.hasClients) return;
+    if (!_scroll.hasClients || widget.images.isEmpty) return;
     final itemWidth = kThumbnailSize + 4;
     final target = index * itemWidth -
         (MediaQuery.sizeOf(context).width / 2) +
