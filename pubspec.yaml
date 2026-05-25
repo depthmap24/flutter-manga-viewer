@@ -1,7 +1,7 @@
 name: imageviewer
 description: "Image viewer with gallery, swipe, zoom, NovelAI metadata, and developer logs"
 publish_to: 'none'
-version: 2.0.10+10
+version: 2.0.11+11
 
 environment:
   sdk: ^3.12.0
