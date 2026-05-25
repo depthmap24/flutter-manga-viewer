@@ -71,10 +71,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
     );
 
-    if (confirmed != true) return;
-
     final input = controller.text.trim();
-    controller.dispose();
+    controller.dispose(); // always dispose before any early returns
+
+    if (confirmed != true) return;
 
     if (input.isEmpty) return;
 
@@ -93,6 +93,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   void _openViewer(List<ImageFile> images, int index) {
+    // Sync global index so any provider watchers stay consistent.
     ref.read(currentIndexProvider.notifier).state = index;
     Navigator.of(context).push(
       MaterialPageRoute(
