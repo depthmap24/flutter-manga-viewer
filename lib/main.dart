@@ -6,6 +6,7 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
+
 import 'core/log_service.dart';
 import 'core/theme.dart';
 import 'screens/home_screen.dart';
@@ -13,53 +14,93 @@ import 'screens/viewer_screen.dart';
 import 'services/gallery_service.dart';
 
 void main() {
+  // ZERO async work before runApp().
+  // Any platform-channel call (path_provider, app_links, permission_handler)
+  // before the first frame risks an ANR-kill on slow devices because the
+  // platform thread may not be ready to answer yet.
   runZonedGuarded<void>(
-    () async {
+    () {
       WidgetsFlutterBinding.ensureInitialized();
 
-      // Prevent OOM crashes from full-resolution images filling the cache.
       PaintingBinding.instance.imageCache.maximumSizeBytes = 50 * 1024 * 1024;
 
-      FlutterError.onError = (details) {
-        LogService.instance.error(
-            details.exceptionAsString(), details.stack);
-      };
+      FlutterError.onError = (details) =>
+          LogService.instance.error(details.exceptionAsString(), details.stack);
       PlatformDispatcher.instance.onError = (error, stack) {
         LogService.instance.error(error, stack);
         return true;
       };
 
-      await LogService.instance.init();
-      LogService.instance.info('App starting — log: ${LogService.instance.logFilePath}');
-
-      // Surface any crash report written by the Kotlin UncaughtExceptionHandler.
-      // Checks both the external (Downloads/imageviewer/) and the app external-files dir.
-      await _loadCrashReport();
-
-      Uri? initialUri;
-      try {
-        initialUri = await AppLinks().getInitialLink();
-        if (initialUri != null) {
-          LogService.instance.info('Intent URI: $initialUri');
-        }
-      } catch (e, st) {
-        LogService.instance.warning('Failed to get initial link: $e', st);
-      }
-
-      runApp(
-        ProviderScope(
-          child: ImageViewerApp(initialUri: initialUri),
-        ),
-      );
+      runApp(const ProviderScope(child: _AppInit()));
     },
-    (error, stack) {
-      LogService.instance.error(error, stack);
-    },
+    (error, stack) => LogService.instance.error(error, stack),
   );
 }
 
-/// Reads imageviewer_crash.txt from every location the Kotlin handler might
-/// have written to, logs the contents, then deletes the file.
+/// Shown for one frame while async startup work completes, then replaced
+/// by the real app. Doing async init here — after the first frame is on
+/// screen — means the platform thread is fully ready and ANR is impossible.
+class _AppInit extends StatefulWidget {
+  const _AppInit();
+
+  @override
+  State<_AppInit> createState() => _AppInitState();
+}
+
+class _AppInitState extends State<_AppInit> {
+  Widget? _next;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _init());
+  }
+
+  Future<void> _init() async {
+    await LogService.instance.init();
+    LogService.instance.info(
+        'App started — log: ${LogService.instance.logFilePath}');
+
+    await _loadCrashReport();
+
+    Uri? initialUri;
+    try {
+      initialUri = await AppLinks().getInitialLink();
+      if (initialUri != null) {
+        LogService.instance.info('Intent URI: $initialUri');
+      }
+    } catch (e, st) {
+      LogService.instance.warning('Failed to get initial link: $e', st);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _next = MaterialApp(
+        title: 'Image Viewer',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light(),
+        darkTheme: AppTheme.dark(),
+        themeMode: ThemeMode.system,
+        home: initialUri != null
+            ? _IntentLoader(uri: initialUri)
+            : const HomeScreen(),
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _next ??
+        const MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.black,
+            body: Center(child: CircularProgressIndicator(color: Colors.white)),
+          ),
+        );
+  }
+}
+
 Future<void> _loadCrashReport() async {
   final candidates = <File>[];
   try {
@@ -68,10 +109,8 @@ Future<void> _loadCrashReport() async {
       candidates.add(File('${ext.path}/imageviewer_crash.txt'));
     }
   } catch (_) {}
-  try {
-    // Downloads/imageviewer/ — written when MANAGE_EXTERNAL_STORAGE is granted.
-    candidates.add(File('/storage/emulated/0/Download/imageviewer/imageviewer_crash.txt'));
-  } catch (_) {}
+  candidates
+      .add(File('/storage/emulated/0/Download/imageviewer/imageviewer_crash.txt'));
   try {
     final internal = await getApplicationDocumentsDirectory();
     candidates.add(File('${internal.path}/crash.txt'));
@@ -85,26 +124,6 @@ Future<void> _loadCrashReport() async {
         await f.delete();
       }
     } catch (_) {}
-  }
-}
-
-class ImageViewerApp extends StatelessWidget {
-  final Uri? initialUri;
-
-  const ImageViewerApp({super.key, this.initialUri});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Image Viewer',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
-      themeMode: ThemeMode.system,
-      home: initialUri != null
-          ? _IntentLoader(uri: initialUri!)
-          : const HomeScreen(),
-    );
   }
 }
 
@@ -124,11 +143,8 @@ class _IntentLoaderState extends State<_IntentLoader> {
   }
 
   Future<void> _load() async {
-    final svc = GalleryService();
-    final result = await svc.loadFromUri(widget.uri);
-
+    final result = await GalleryService().loadFromUri(widget.uri);
     if (!mounted) return;
-
     if (result == null || result.images.isEmpty) {
       LogService.instance.warning('Intent load returned no images');
       Navigator.of(context).pushReplacement(
@@ -136,24 +152,17 @@ class _IntentLoaderState extends State<_IntentLoader> {
       );
       return;
     }
-
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => ViewerScreen(
-          images: result.images,
-          initialIndex: result.startIndex,
-        ),
+        builder: (_) =>
+            ViewerScreen(images: result.images, initialIndex: result.startIndex),
       ),
     );
   }
 
   @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
-      backgroundColor: Colors.black,
-      body: Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(child: CircularProgressIndicator(color: Colors.white)),
+      );
 }
