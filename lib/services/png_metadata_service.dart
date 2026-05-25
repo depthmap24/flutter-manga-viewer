@@ -30,6 +30,7 @@ class PngMetadataService {
 
     while (offset + 12 <= bytes.length) {
       final length = _u32(bytes, offset);
+      if (length > 100 * 1024 * 1024) break; // reject absurd chunk sizes (>100MB)
       final type = String.fromCharCodes(bytes.sublist(offset + 4, offset + 8));
       final dataEnd = offset + 8 + length;
       if (dataEnd + 4 > bytes.length) break;
