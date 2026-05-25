@@ -57,15 +57,20 @@ class _AppInitState extends State<_AppInit> {
   }
 
   Future<void> _init() async {
-    await LogService.instance.init();
+    await LogService.instance.init()
+        .timeout(const Duration(seconds: 5), onTimeout: () {});
     LogService.instance.info(
         'App started — log: ${LogService.instance.logFilePath}');
 
-    await _loadCrashReport();
+    await _loadCrashReport()
+        .timeout(const Duration(seconds: 3), onTimeout: () {})
+        .catchError((_) {});
 
     Uri? initialUri;
     try {
-      initialUri = await AppLinks().getInitialLink();
+      initialUri = await AppLinks()
+          .getInitialLink()
+          .timeout(const Duration(seconds: 3), onTimeout: () => null);
       if (initialUri != null) {
         LogService.instance.info('Intent URI: $initialUri');
       }
