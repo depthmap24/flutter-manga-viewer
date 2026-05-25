@@ -6,8 +6,6 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-
 import 'core/log_service.dart';
 import 'core/theme.dart';
 import 'screens/home_screen.dart';
@@ -30,12 +28,6 @@ void main() {
         LogService.instance.error(error, stack);
         return true;
       };
-
-      // Request MANAGE_EXTERNAL_STORAGE so the crash/log files land in Downloads
-      // (the fallback is the app's external-files dir, reachable via USB).
-      try {
-        await Permission.manageExternalStorage.request();
-      } catch (_) {}
 
       await LogService.instance.init();
       LogService.instance.info('App starting — log: ${LogService.instance.logFilePath}');
